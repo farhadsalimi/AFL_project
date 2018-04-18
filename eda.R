@@ -14,7 +14,7 @@ main_df_20132017 <-
   filter(date >= as.Date("2013/01/01"))
 
 # let's make a report
-create_report(main_df_20132017)  
+create_report(main_df_20132017, output_file = "AFL_EDA.html")  
 
 # it seems that we have quite a lot of missing value, we need to impute
 # good news is that the previous performance seems to correlate well with the outcome of the match!
