@@ -1,14 +1,18 @@
-# make a clean environment
+# make a clean environment ----
 rm(list=ls(all=TRUE))
 
-# load packages----
+
+# load packages ----
 library(tidyverse)
 library(caret)
 library(caretEnsemble)
 
-# modelling -----
+
+# find the best model -----
+
 # set seed for reproducibility
-set.seed(14)
+seed_n <- 14
+set.seed(seed_n)
 
 # import the dataset
 main_df <- read_rds("main_df_for_modelling.rds")
@@ -69,6 +73,7 @@ test_df_transformed <-
 
 # model building
   # create custom indices: folds
+
 folds <- createFolds(train_df_transformed$result, k = 5)
 
   # create reusable trainControl object: control
@@ -95,8 +100,7 @@ model_rf <- train(
   metric = "ROC",
   method = "ranger",
   trControl = control,
-  respect.unordered.factors = TRUE,
-  tuneLength = 10
+  respect.unordered.factors = TRUE
 )
 
   # fit svm model: model_svm
@@ -131,15 +135,33 @@ model_rpart <- train(
   trControl = control
 )
 
+# fit logistic model: model_logit
+model_logit <- train(
+  as.factor(result) ~ .,
+  data = train_df_transformed,
+  method = "LogitBoost",
+  trControl = control
+)
+
+# fit xgboost model: model_xgboost
+model_xgboost <- train(
+  as.factor(result) ~ .,
+  data = train_df_transformed,
+  method = "xgbDART",
+  trControl = control
+)
+
  # create model_list
 model_list <- 
   list(
-    glmnet = model_glmnet,
-    rf     = model_rf,
-    svm    = model_svm,
-    nn     = model_nn,
-    nb     = model_nb,
-    rpart  = model_rpart)
+    glmnet    = model_glmnet,
+    rf        = model_rf,
+    svm       = model_svm,
+    nn        = model_nn,
+    nb        = model_nb,
+    rpart     = model_rpart,
+    logistic  = model_logit,
+    xgboost   = model_xgboost)
 
   # pass model_list to resamples(): resamples
 resamples <- resamples(model_list)
@@ -152,7 +174,8 @@ summary(resamples)
 dotplot(resamples, metric = "ROC")
 
   # predict using the best model
-best_model_pred <- predict(model_rf, test_df_transformed)
+best_model_pred <- predict(model_glmnet, test_df_transformed)
+plot(model_glmnet)
 
   # compare predicted outcome and true outcome
 confusionMatrix(best_model_pred, test_df_transformed$result)
@@ -160,31 +183,92 @@ confusionMatrix(best_model_pred, test_df_transformed$result)
 importance <- varImp(model_glmnet, scale = FALSE)
 plot(importance)
 
-#Ensemble
-# model_list <- caretList(
-#   as.factor(result) ~ .,
-#   data = train_df,
-#   trControl = control,
-#   methodList = c("ranger", "svmPoly")
-# )
-# 
-# xyplot(resamples(model_list))
-# modelCor(resamples(model_list))
-# 
-# glm_ensemble <- caretStack(
-#   model_list,
-#   method="glm",
-#   metric="ROC",
-#   trControl=trainControl(
-#     method="boot",
-#     number=10,
-#     savePredictions="final",
-#     classProbs=TRUE,
-#     summaryFunction=twoClassSummary
-#   )
-# )
-# 
-# # predict using the best model
-# ensemble_pred <- predict(glm_ensemble, test_df)
-# # compare predicted outcome and true outcome
-# confusionMatrix(ensemble_pred, test_df$result)
+
+# tune the best model ------
+# set seed for reproducibility
+set.seed(seed_n)
+
+# Tune the glmnet model
+glm_grid <- 
+  expand.grid(
+    alpha = 0:1,
+    lambda = seq(0.0001, 0.2, length = 100)
+  )
+
+model_glmnet_tuned <- train(
+  factor(result) ~ .,
+  data = train_df_transformed,
+  method = "glmnet",
+  tuneGrid = glm_grid,
+  trControl = control
+)
+
+# create model_list
+model_list_2 <- 
+  list(
+    glmnet       = model_glmnet,
+    rf           = model_rf,
+    svm          = model_svm,
+    nn           = model_nn,
+    nb           = model_nb,
+    rpart        = model_rpart,
+    logistic     = model_logit,
+    xgboost      = model_xgboost,
+    glmnet_tuned = model_glmnet_tuned)
+
+# pass model_list_2 to resamples(): resamples_2
+resamples_2 <- resamples(model_list_2)
+resamples_2
+
+# summarize the results
+summary(resamples_2)
+
+# plot the model performance
+dotplot(resamples_2, metric = "ROC")
+
+plot(model_glmnet_tuned)
+
+tuned_best_model_pred <- predict(model_glmnet_tuned, test_df_transformed)
+confusionMatrix(tuned_best_model_pred, test_df_transformed$result)
+
+# tuned glmnet model performs the same as the one we found previously!
+
+# build ensemble models ----
+# set seed for reproducibility
+set.seed(seed_n)
+
+# Ensemble
+ensemble_model_list <- caretList(
+  as.factor(result) ~ .,
+  data = train_df_transformed,
+  trControl = control,
+  methodList = 
+    c(
+    "ranger",
+    "glmnet"
+    )
+)
+
+xyplot(resamples(ensemble_model_list))
+modelCor(resamples(ensemble_model_list))
+
+# find a good linear combination of rf and glmnet model: linear greedy optimization
+greedy_ensemble <- caretEnsemble(
+  ensemble_model_list, 
+  metric = "ROC",
+  trControl =
+    trainControl(
+    number = 2,
+    summaryFunction = twoClassSummary,
+    classProbs = TRUE
+  ))
+
+summary(greedy_ensemble)
+# ensemble model is a bit better than the glmnet!
+
+# predict using the ensemble model
+ensemble_pred <- predict(greedy_ensemble, test_df_transformed)
+# compare predicted outcome and true outcome
+confusionMatrix(ensemble_pred, test_df_transformed$result)
+
+# ensemble model predict 70% of the AFL results in 2017 correctly!

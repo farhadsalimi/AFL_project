@@ -66,6 +66,20 @@ results_away <-
 # bind home and away datasets
 results_long <- bind_rows(results_away, results_home)
 
+# make a dataset showing the proportion of win for each team, opposition, status
+win_prop <- 
+  results_long %>%
+  # group by team, opposition, status and result
+  group_by(team, opposition, status, result) %>%
+  # find number of each event
+  summarise(n = n()) %>%
+  # find the proportion of each event
+  mutate(win_prop = n / sum(n)) %>%
+  # filter fot wins
+  filter(result == "w") %>%
+  # remove unwanted columns
+  select(-result, -n)
+
 # wrangle player stats dataset----
 player_stats <-
   player_stats %>%
@@ -203,6 +217,11 @@ main_df <- main_df %>%
 
 # join odds
 main_df <- main_df %>% left_join(odds)
+
+# join the win_prop
+main_df <- 
+  main_df %>%
+  left_join(win_prop)
 
 # save the main_df
 write_rds(main_df, path = "afl_main.rds")
